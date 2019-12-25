@@ -4,13 +4,15 @@ public class Segment {
     private String data;
     private int segmentCount;
     private boolean isAck;
-    private static final int firstLineItemsCount = 4;
+    private static final int firstLineItemsCount = 5;
+    private String sender;
 
-    public Segment(String checksum, int sequenceNumber, String data, boolean isAck) {
+    public Segment(String checksum, int sequenceNumber, String data, boolean isAck, String sender) {
         this.checksum = checksum;
         this.sequenceNumber = sequenceNumber;
         this.data = data;
         this.isAck = isAck;
+        this.sender = sender;
     }
 
     public boolean isAck() {
@@ -37,8 +39,13 @@ public class Segment {
         return segmentCount;
     }
 
+    public String getSender() {
+        return sender;
+    }
+
     public String serialize() {
-        return checksum + " " + sequenceNumber + " " + segmentCount + " " + (isAck ? "1" : "0") + "\n" + data;
+        return checksum + " " + sequenceNumber + " " + segmentCount + " "
+                + (isAck ? "1" : "0") + " " + sender + "\n" + data;
     }
 
     public static Segment deserialize(String packet) throws SegmentationFaultException {
@@ -55,8 +62,9 @@ public class Segment {
             int seqNum = Integer.parseInt(firstLineItems[1]);
             int seqCount = Integer.parseInt(firstLineItems[2]);
             boolean isAck = firstLineItems[3].equals("1");
+            String sender = firstLineItems[4];
             String data = lines[1];
-            Segment segment = new Segment(checksum, seqNum, data, isAck);
+            Segment segment = new Segment(checksum, seqNum, data, isAck, sender);
             segment.setSegmentCount(seqCount);
             return segment;
         } catch (Exception ex) {
