@@ -26,6 +26,7 @@ public class UDPClient {
     private static final int DATA_MAX_LENGTH = (MAX_MSG_SIZE - ALGORITHM_CHECKSUM_LENGTH
             - SEQUENCE_COUNT_LENGTH - SEQUENCE_NUMBER_LENGTH - WHITE_SPACE_LENGTH - IS_ACK_LENGTH) / CHAR_LENGTH;
     private static final int MAX_WINDOW_SIZE = 16;
+    static boolean[] received;
     private static final String SERVER = "127.0.1.1";
     private static final int PORT = 4353;
     private static DatagramSocket udpSocket = null;
@@ -36,6 +37,8 @@ public class UDPClient {
     private static String myUsername = null;
     private static Step step = Step.ECHO;
     private static String relayingTo;
+    private static boolean isWaiting = false;
+    private static int begin, end;
 
     // Receives datagram and write to standard output
     public static class UDPReader extends Thread {
@@ -54,11 +57,12 @@ public class UDPClient {
                             String content = packet.substring("OK Relaying to".length());
                             relayingTo = content.split(" ")[0];
                             step = Step.RELAYING;
-                        }
-                        else if (packet.startsWith("OK Not relaying")) {
+                        } else if (packet.startsWith("OK Not relaying")) {
                             step = Step.ECHO;
                         }
-                        System.out.print(packet);
+                        if (isWaiting) {
+                            System.out.print(packet);
+                        }
                     } else {
                         try {
                             Segment segment = Segment.deserialize(packet);
@@ -81,14 +85,37 @@ public class UDPClient {
                                 } else {
                                     sendAck(false, segment.getSequenceNumber(), segment.getSender());
                                 }
+                            } else {
+                                String exceptedChecksum = createChecksum(segment.getData());
+                                if (exceptedChecksum.equals(segment.getChecksum())) {
+                                    if (segment.getData().equals("1")) {
+                                        received[segment.getSequenceNumber()] = true;
+                                        if (segment.getSequenceNumber() == begin) {
+                                            int lastEnd = end;
+                                            while (begin < sendingSegments.size() && received[begin]) {
+                                                begin++;
+                                            }
+                                            end = Math.min(sendingSegments.size(), begin + MAX_WINDOW_SIZE);
+                                            if (begin == sendingSegments.size()) {
+                                                System.out.println("Sent successfully");
+                                            }
+                                            for (int i = lastEnd; i < end; i++) {
+                                                new Timer(sendingSegments.get(i)).start();
+                                            }
+                                        }
+                                    } else if (!received[segment.getSequenceNumber()]) {
+                                        new Timer(sendingSegments.get(segment.getSequenceNumber())).start();
+                                    }
+                                } else if (!received[segment.getSequenceNumber()]) {
+                                    new Timer(sendingSegments.get(segment.getSequenceNumber())).start();
+                                }
                             }
                         } catch (SegmentationFaultException e) {
-                            e.printStackTrace();
+//                            e.printStackTrace();
                         }
                     }
                 } catch (IOException e) {
-                    System.out.println(e);
-                    continue;
+//                    e.printStackTrace();
                 }
             }
         }
@@ -108,8 +135,9 @@ public class UDPClient {
             sendUnreliable(".");
         }
         sendUnreliable("CONN " + user + "\n");
-        String data = createChecksum(ack ? "1" : "0");
-        Segment segment = new Segment(data, sequenceNumber, data, true, myUsername);
+        isWaiting = false;
+        String data = ack ? "1" : "0";
+        Segment segment = new Segment(createChecksum(data), sequenceNumber, data, true, myUsername);
         sendUnreliable(segment.serialize());
         sendUnreliable("." + "\n");
         if (wasRelaying) {
@@ -124,67 +152,67 @@ public class UDPClient {
 
     // Reads from standard input and sends datagram
     public static void main(String[] args) throws IOException, NoSuchAlgorithmException {
-        String test = generateRandom(5000);
         messageDigest = MessageDigest.getInstance("MD5");
         udpSocket = new DatagramSocket();
         BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
         (new UDPReader()).start();
         String input;
         while ((input = stdin.readLine()) != null) {
+            String cmd = input.split(" ")[0];
             if (step == Step.ECHO) {
-                switch (input.split(" ")[0]) {
+                switch (cmd) {
                     case "CONN":
                     case "NAME":
                     case "QUIT":
                     case "CHNL":
                     case "LIST":
-                    case ".":
                         sendUnreliable(input + "\n");
+                        isWaiting = true;
                         break;
                     default:
                         sendReliable(input);
                 }
+            } else if (cmd.equals(".")) {
+                sendUnreliable(input + "\n");
+                isWaiting = true;
             } else {
                 sendReliable(input);
             }
         }
     }
 
-    private static List<Segment> convertDataToSegments(String data, boolean isAck) {
+    private static Segment getFirstSegment(String data, int start, int seqNum) {
+        int end = Math.min(data.length(), DATA_MAX_LENGTH + start);
+        String segmentData = data.substring(start, end);
+        String checksum = createChecksum(segmentData);
+        return new Segment(checksum, seqNum, segmentData, false, myUsername);
+    }
+
+    private static List<Segment> convertDataToSegments(String data) {
         int start = 0;
         List<Segment> segments = new ArrayList<>();
         while (start < data.length()) {
-            int end = Math.min(data.length(), DATA_MAX_LENGTH + start);
-            String segmentData = data.substring(start, end);
-            String checksum = createChecksum(segmentData);
-            int seqNum = segments.size();
-            segments.add(new Segment(checksum, seqNum, segmentData, isAck, myUsername));
+            segments.add(getFirstSegment(data, start, segments.size()));
             start = end;
         }
         segments.forEach(segment -> segment.setSegmentCount(segments.size()));
         return segments;
     }
 
-    private static String generateRandom(int count) {
-        StringBuilder s = new StringBuilder();
-        for (int i = 0; i < count; i++) {
-            s.append((char) ((i % 26) + 'a'));
-        }
-        return s.toString();
-    }
-
-    private static void sendReliable(String input) throws IOException {
-        sendingSegments = convertDataToSegments(input, false);
-        for (Segment segment : sendingSegments) {
-            sendUnreliable(segment.serialize());
+    private static void sendReliable(String input) {
+        sendingSegments = convertDataToSegments(input);
+        received = new boolean[sendingSegments.size()];
+        begin = 0;
+        end = Math.min(MAX_WINDOW_SIZE, sendingSegments.size());
+        for (int i = begin; i < end; i++) {
+            new Timer(sendingSegments.get(i)).start();
         }
     }
 
-    private static void sendUnreliable(String packet) throws IOException {
+    static void sendUnreliable(String packet) throws IOException {
         DatagramPacket sendDgram = new DatagramPacket(packet.getBytes(),
                 Math.min(packet.length(), MAX_MSG_SIZE),
                 InetAddress.getByName(SERVER), PORT);
         udpSocket.send(sendDgram);
     }
 }
-
