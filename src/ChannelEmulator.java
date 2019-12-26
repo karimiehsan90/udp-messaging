@@ -266,8 +266,13 @@ public class ChannelEmulator {
             response = "OK Bye";
             cleanup(isaddr);
         } else if (cmd.equals("NAME") && parts.length == 2 && (room = haveRoom(cinfo))) {
-            setName(parts[1], isaddr);
-            response = "OK Hello " + parts[1];
+            if (!nameToSock.containsKey(parts[1])) {
+                setName(parts[1], isaddr);
+                response = "OK Hello " + parts[1];
+            }
+            else {
+                response = "!OK Already taken";
+            }
         } else if (cmd.equals("CONN") && parts.length > 1 && (room = haveRoom(cinfo))) {
             if (cinfo == null) cinfo = new ChannelInfo();
             cinfo.peer = (msg.split("\\s", 2))[1];
