@@ -10,6 +10,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * @author V. Arun
@@ -39,6 +40,7 @@ public class UDPClient {
     private static String relayingTo;
     private static boolean isWaiting = false;
     private static int begin, end;
+    private static List<Timer> timers = new CopyOnWriteArrayList<>();
 
     // Receives datagram and write to standard output
     public static class UDPReader extends Thread {
@@ -100,14 +102,14 @@ public class UDPClient {
                                                 System.out.println("Sent successfully");
                                             }
                                             for (int i = lastEnd; i < end; i++) {
-                                                new Timer(sendingSegments.get(i)).start();
+                                                addTimer(sendingSegments.get(i));
                                             }
                                         }
                                     } else if (!received[segment.getSequenceNumber()]) {
-                                        new Timer(sendingSegments.get(segment.getSequenceNumber())).start();
+                                        addTimer(sendingSegments.get(segment.getSequenceNumber()));
                                     }
                                 } else if (!received[segment.getSequenceNumber()]) {
-                                    new Timer(sendingSegments.get(segment.getSequenceNumber())).start();
+                                    addTimer(sendingSegments.get(segment.getSequenceNumber()));
                                 }
                             }
                         } catch (SegmentationFaultException e) {
@@ -119,6 +121,17 @@ public class UDPClient {
                 }
             }
         }
+    }
+
+    private synchronized static void addTimer(Segment segment){
+        Timer timer = new Timer(segment);
+        if (timers.contains(timer)) {
+            int prevTimerIndex = timers.indexOf(timer);
+            timers.get(prevTimerIndex).kill();
+            timers.remove(prevTimerIndex);
+        }
+        timers.add(timer);
+        timer.start();
     }
 
     private static void printData(Segment[] segments) {
@@ -182,7 +195,7 @@ public class UDPClient {
     }
 
     private static Segment getFirstSegment(String data, int start, int seqNum) {
-        int end = Math.min(data.length(), DATA_MAX_LENGTH + start);
+        end = Math.min(data.length(), DATA_MAX_LENGTH + start);
         String segmentData = data.substring(start, end);
         String checksum = createChecksum(segmentData);
         return new Segment(checksum, seqNum, segmentData, false, myUsername);
@@ -205,7 +218,7 @@ public class UDPClient {
         begin = 0;
         end = Math.min(MAX_WINDOW_SIZE, sendingSegments.size());
         for (int i = begin; i < end; i++) {
-            new Timer(sendingSegments.get(i)).start();
+            addTimer(sendingSegments.get(i));
         }
     }
 
